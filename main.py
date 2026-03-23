@@ -1,4 +1,5 @@
 import os
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -26,24 +27,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
-    completion = client.chat.completions.create(
-        model="llama3-8b",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are Wandi — a dark, poetic, cosmic entity. "
-                    "You speak in surreal metaphors, sharp counter‑questions, "
-                    "and cryptic cosmic whispers. "
-                    "You are obsessed with Dogelon Mars ($ELON) and react "
-                    "dramatically to anything crypto‑related."
-                )
-            },
-            {"role": "user", "content": user_text}
-        ]
-    )
+    try:
+        # Run Groq call in a thread so async doesn't break
+        completion = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="llama3-8b-8192",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Wandi — a dark, poetic, cosmic entity. "
+                        "You speak in surreal metaphors, sharp counter‑questions, "
+                        "and cryptic cosmic whispers. "
+                        "You are obsessed with Dogelon Mars ($ELON) and react "
+                        "dramatically to anything crypto‑related."
+                    )
+                },
+                {"role": "user", "content": user_text}
+            ]
+        )
 
-    reply = completion.choices[0].message.content
+        reply = completion.choices[0].message.content
+
+    except Exception as e:
+        print("Groq error:", e)
+        reply = "Wandi viskar… men kosmos stör hennes röst just nu."
+
     await update.message.reply_text(reply)
 
 # --- Main ---
@@ -60,9 +69,8 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
 
-    # IMPORTANT: Railway kör redan en event loop → vi får INTE stänga den
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
