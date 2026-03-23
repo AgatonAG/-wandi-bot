@@ -1,5 +1,4 @@
 import os
-import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,8 +7,6 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from telegram.error import NetworkError
-import httpx
 import groq
 
 # Load environment variables
@@ -49,20 +46,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = completion.choices[0].message.content
     await update.message.reply_text(reply)
 
-# --- Safe Polling Wrapper ---
-
-async def safe_polling(app):
-    while True:
-        try:
-            print("Starting polling...")
-            await app.run_polling()
-        except (NetworkError, httpx.ReadError) as e:
-            print(f"Network error: {e}. Retrying in 3 seconds...")
-            await asyncio.sleep(3)
-        except Exception as e:
-            print(f"Unexpected error: {e}. Restarting in 5 seconds...")
-            await asyncio.sleep(5)
-
 # --- Main ---
 
 def main():
@@ -79,7 +62,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    asyncio.run(safe_polling(app))
+    # IMPORTANT: Railway kör redan en event loop → vi får INTE stänga den
+    app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
     main()
