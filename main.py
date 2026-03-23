@@ -1,4 +1,5 @@
 import os
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -7,6 +8,8 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+from telegram.error import NetworkError
+import httpx
 import groq
 
 # Load environment variables
@@ -26,9 +29,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
-    # Call Groq with a supported model
     completion = client.chat.completions.create(
-        model="llama3-8b",   # <--- NY MODELL, FUNGERAR
+        model="llama3-8b",
         messages=[
             {
                 "role": "system",
@@ -47,15 +49,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = completion.choices[0].message.content
     await update.message.reply_text(reply)
 
+# --- Safe Polling Wrapper ---
+
+async def safe_polling(app):
+    while True:
+        try:
+            print("Starting polling...")
+            await app.run_polling()
+        except (NetworkError, httpx.ReadError) as e:
+            print(f"Network error: {e}. Retrying in 3 seconds...")
+            await asyncio.sleep(3)
+        except Exception as e:
+            print(f"Unexpected error: {e}. Restarting in 5 seconds...")
+            await asyncio.sleep(5)
+
 # --- Main ---
 
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    app.run_polling()
+    asyncio.run(safe_polling(app))
 
 if __name__ == "__main__":
     main()
