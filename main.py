@@ -1,5 +1,18 @@
-# rebuild trigger
+import sys
 import os
+import shutil
+
+# Purge any stale telegram bytecode/modules that may have been cached from an
+# older version of python-telegram-bot.  This must run before the first
+# telegram import so that Python resolves the package fresh from the venv.
+for _mod in list(sys.modules.keys()):
+    if _mod == "telegram" or _mod.startswith("telegram."):
+        del sys.modules[_mod]
+
+for _cache_dir in ["__pycache__", os.path.join(os.path.dirname(__file__), "__pycache__")]:
+    if os.path.isdir(_cache_dir):
+        shutil.rmtree(_cache_dir, ignore_errors=True)
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import groq
