@@ -1,16 +1,20 @@
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import os
 import groq
 
+# Environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Groq client
 client = groq.Client(api_key=GROQ_API_KEY)
 
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Wandi vaknar i mörkret...")
 
+# Handle all text messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
@@ -22,7 +26,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     )
 
-    reply = completion.choices[0].message["content"]
+    reply = completion.choices[0].message.content
     await update.message.reply_text(reply)
 
 def main():
