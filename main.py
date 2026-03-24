@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,17 +9,26 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-import groq
+from groq import Groq
 
-# Load environment variables
+# Logging så du ser vad som händer i Railway
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+if not GROQ_API_KEY or not TELEGRAM_BOT_TOKEN:
+    raise ValueError("Saknar GROQ_API_KEY eller TELEGRAM_BOT_TOKEN i environment variables!")
+
 # Groq client
-client = groq.Client(api_key=GROQ_API_KEY)
+client = Groq(api_key=GROQ_API_KEY)
 
 # --- Handlers ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Wandi öppnar sina kosmiska ögon i mörkret..."
@@ -26,12 +36,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    logger.info(f"Received message: {user_text}")
 
     try:
-        # Run Groq call in a thread so async doesn't break
         completion = await asyncio.to_thread(
             client.chat.completions.create,
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",          # <-- Fixad modell
             messages=[
                 {
                     "role": "system",
@@ -44,20 +54,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 },
                 {"role": "user", "content": user_text}
-            ]
+            ],
+            temperature=0.9,
+            max_tokens=500
         )
-
         reply = completion.choices[0].message.content
-
     except Exception as e:
-        print("Groq error:", e)
+        logger.error(f"Groq error: {e}")
         reply = "Wandi viskar… men kosmos stör hennes röst just nu."
 
     await update.message.reply_text(reply)
 
 # --- Main ---
-
-def main():
+async def main():
     app = (
         ApplicationBuilder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -68,11 +77,15 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    # Ta bort gammal webhook så polling fungerar bättre på Railway
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Old webhook deleted - starting fresh polling")
 
-    app.run_polling(close_loop=False)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logger.info("Wandi is starting...")
+    await app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
-    
+    asyncio.run(main())
