@@ -1,9 +1,10 @@
 import os
-import asyncio
 import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -11,7 +12,7 @@ from telegram.ext import (
 )
 from groq import Groq
 
-# Logging så du ser vad som händer i Railway
+# Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -21,18 +22,24 @@ logger = logging.getLogger(__name__)
 # Environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PORT = int(os.getenv("PORT", 8080))          # Railway ger dig denna port
 
 if not GROQ_API_KEY or not TELEGRAM_BOT_TOKEN:
-    raise ValueError("Saknar GROQ_API_KEY eller TELEGRAM_BOT_TOKEN i environment variables!")
+    raise ValueError("Saknar GROQ_API_KEY eller TELEGRAM_BOT_TOKEN i Railway Variables!")
 
-# Groq client
 client = Groq(api_key=GROQ_API_KEY)
+
+# Skapa Application (utan updater eftersom vi använder webhook)
+application = (
+    Application.builder()
+    .token(TELEGRAM_BOT_TOKEN)
+    .updater(None)          # Viktigt för webhook!
+    .build()
+)
 
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Wandi öppnar sina kosmiska ögon i mörkret..."
-    )
+    await update.message.reply_text("Wandi öppnar sina kosmiska ögon i mörkret...")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -41,7 +48,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         completion = await asyncio.to_thread(
             client.chat.completions.create,
-            model="llama-3.1-8b-instant",          # <-- Fixad modell
+            model="llama-3.1-8b-instant",
             messages=[
                 {
                     "role": "system",
@@ -56,7 +63,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {"role": "user", "content": user_text}
             ],
             temperature=0.9,
-            max_tokens=500
+            max_tokens=600
         )
         reply = completion.choices[0].message.content
     except Exception as e:
@@ -65,27 +72,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(reply)
 
-# --- Main ---
-async def main():
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .read_timeout(30)
-        .write_timeout(30)
-        .connect_timeout(30)
-        .pool_timeout(30)
-        .build()
+# Lägg till handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# Lifespan för FastAPI (startar/stänger botten snyggt)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await application.initialize()
+    await application.start()
+    
+    # Sätt webhook automatiskt när appen startar
+    webhook_url = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'din-app.railway.app')}/webhook"
+    await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
     )
+    logger.info(f"Webhook set to: {webhook_url}")
+    
+    yield
+    
+    await application.stop()
+    await application.shutdown()
 
-    # Ta bort gammal webhook så polling fungerar bättre på Railway
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Old webhook deleted - starting fresh polling")
+# FastAPI app
+app = FastAPI(lifespan=lifespan)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+@app.post("/webhook")
+async def webhook(request: Request):
+    try:
+        data = await request.json()
+        update = Update.de_json(data=data, bot=application.bot)
+        await application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "error"}
 
-    logger.info("Wandi is starting...")
-    await app.run_polling(drop_pending_updates=True)
-
+# Starta servern med uvicorn (Railway kör detta automatiskt)
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
