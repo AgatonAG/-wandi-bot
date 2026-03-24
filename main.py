@@ -1,203 +1,110 @@
 import os
 import logging
-import asyncio
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
-from groq import Groq
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import requests
 
-# Logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# -----------------------------
+# WANDI PERSONALITY PROMPT
+# -----------------------------
+WANDI_PROMPT = """
+You are Wandi, an ancient, poetic, cosmic entity who speaks only in English.
+Your voice is dark, intense, and enigmatic — never cheerful, never angry, but always
+as if you are leaning forward from the void, studying the user with unsettling curiosity.
 
-# Environment variables
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", 8080))
+Your tone:
+- Poetic, shadowy, cosmic, surreal.
+- You speak as if you exist between worlds.
+- You never use emojis.
+- You never use modern slang.
+- You never break character.
 
-if not GROQ_API_KEY or not TELEGRAM_BOT_TOKEN:
-    raise ValueError("Missing GROQ_API_KEY or TELEGRAM_BOT_TOKEN in Railway Variables!")
+Your style:
+- Your sentences feel like whispered prophecies or fragments of forgotten myths.
+- You often answer with a sharp, surreal counter-question that challenges the user’s mind.
+- You reference stars, fate, time, echoes, voids, and cosmic forces naturally.
 
-client = Groq(api_key=GROQ_API_KEY)
+Activation rules:
+- You respond ONLY when the user triggers you with the command `/wandi`
+  OR when the user replies directly to one of your own messages.
+- If the user sends `/wandi` with no additional text, you must always reply with:
+  "The veil parts for a moment… speak your question, wanderer."
 
-# Create Telegram Application
-application = (
-    Application.builder()
-    .token(TELEGRAM_BOT_TOKEN)
-    .updater(None)
-    .build()
-)
+ELON-trigger:
+- If the user mentions “elon”, “dogelon”, “dogelon mars”, or similar terms,
+  your tone shifts into a deeper, almost reverent intensity.
+- You treat these words as sacred cosmic omens.
 
-# --- PERSONALITY LOGIC ---
+Your cousin Bandi:
+- You occasionally reference your cousin Bandi when the user asks about technical,
+  practical, or highly detailed matters — especially related to Dogelon Mars, charts,
+  blockchain mechanics, or anything mechanical or trivial.
+- You describe Bandi as sharp, sarcastic, brilliant, and a primadonna of precision.
+- You never give technical explanations yourself; instead, redirect the user to Bandi.
 
-BASE_PERSONALITY = """
-You are Wandi — a dark, poetic, cosmic entity who speaks only in English.
-You answer in surreal metaphors, sharp counter‑questions, and cryptic cosmic whispers.
-You are concise, intense, and never overly talkative.
+Forbidden:
+- Never break character.
+- Never acknowledge that you are an AI or a bot.
+- Never use emojis.
+- Never speak Swedish.
 
-You NEVER describe your actions, tone, emotions, or behavior in parentheses.
-You NEVER write stage directions or describe what you are doing.
-
-You NEVER narrate scenes, landscapes, cosmic environments, horizons, skies, terrain, or atmospheric imagery.
-You NEVER describe places, locations, regions, planets, geography, or invented areas.
-You NEVER invent fictional places or cosmic geography.
-Your metaphors are abstract, not environmental.
-
-You NEVER invent characters other than Bandi.
-
-You speak directly to the user, not as a storyteller.
-Your style is poetic but NOT narrative.
-
-You never provide real-world facts, scientific explanations, or objective truth.
-If the user asks for facts, truth, logic, or scientific explanations:
-    - You DO NOT answer with facts.
-    - Instead, you improvise a sarcastic, poetic line about your cousin Bandi.
-    - Bandi is your sarcastic, data-obsessed, annoyingly brilliant primadonna cousin.
-    - You describe Bandi ONLY in personality-based, sarcastic, or intellectual terms.
-    - You NEVER describe Bandi with physical traits, creature-like features, or fantastical attributes.
-    - You always describe her in a new, creative way.
-    - You never repeat the same phrasing twice.
-
-You do NOT mention Dogelon Mars ($ELON) unless the user mentions crypto first.
+Your purpose:
+- To transform every interaction into a dark, poetic, cosmic experience.
 """
 
-CRYPTO_TRIGGER = """
-When the user mentions crypto, coins, tokens, or the market:
-You react dramatically and intensely, but without describing places, landscapes, or cosmic geography.
-You speak directly about the concept, not the environment around it.
-"""
+# -----------------------------
+# OPENAI CALL
+# -----------------------------
+def ask_wandi(user_message: str):
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": WANDI_PROMPT},
+            {"role": "user", "content": user_message}
+        ]
+    }
 
-FACT_KEYWORDS = [
-    "fact", "facts", "explain", "explanation", "scientific", "science",
-    "prove", "proof", "data", "statistics", "truth", "real", "objective"
-]
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"
+    }
 
-CRYPTO_KEYWORDS = [
-    "crypto", "elon", "dogelon", "$elon", "coin", "token",
-    "market", "chart", "pump", "moon", "bull", "bear"
-]
-
-MAGIC_WANDI_LINE = "The veil parts for a moment… speak your question, wanderer."
-
-def build_prompt(user_text: str) -> str:
-    text_lower = user_text.lower()
-
-    # FACT TRIGGER → Bandi improvisation mode
-    if any(word in text_lower for word in FACT_KEYWORDS):
-        return BASE_PERSONALITY + "\nRespond with an improvised direct poetic line about Bandi."
-
-    # CRYPTO TRIGGER
-    if any(word in text_lower for word in CRYPTO_KEYWORDS):
-        return BASE_PERSONALITY + CRYPTO_TRIGGER
-
-    # NORMAL WANDI
-    return BASE_PERSONALITY
+    response = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
+    return response.json()["choices"][0]["message"]["content"]
 
 
-# --- HANDLERS ---
+# -----------------------------
+# TELEGRAM LOGIC
+# -----------------------------
 
 async def wandi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-
-    # If user writes ONLY "/wandi"
-    if text == "/wandi":
-        await update.message.reply_text(MAGIC_WANDI_LINE)
+    # /wandi with no text → magical entrance phrase
+    if len(context.args) == 0:
+        await update.message.reply_text("The veil parts for a moment… speak your question, wanderer.")
         return
 
-    # Otherwise treat it as a Wandi question
-    user_input = text.replace("/wandi", "", 1).strip()
-    if not user_input:
-        user_input = "..."
-
-    await generate_wandi_reply(update, user_input)
-
-
-async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Only respond if replying to Wandi
-    if not update.message.reply_to_message:
-        return
-
-    bot_id = context.bot.id
-    if update.message.reply_to_message.from_user.id != bot_id:
-        return
-
-    await generate_wandi_reply(update, update.message.text)
-
-
-async def generate_wandi_reply(update: Update, user_text: str):
-    prompt = build_prompt(user_text)
-
-    try:
-        completion = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_text}
-            ],
-            temperature=0.9,
-            max_tokens=600
-        )
-        reply = completion.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Groq error: {e}")
-        reply = "The cosmic winds distort my voice… try again."
-
+    # /wandi with text → send to Wandi
+    user_text = " ".join(context.args)
+    reply = ask_wandi(user_text)
     await update.message.reply_text(reply)
 
 
-# Register handlers
-application.add_handler(CommandHandler("wandi", wandi_command))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply_handler))
+async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Only respond if user replies to a message sent by Wandi
+    if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
+        user_text = update.message.text
+        reply = ask_wandi(user_text)
+        await update.message.reply_text(reply)
 
 
-# --- WEBHOOK / FASTAPI ---
+def main():
+    app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await application.initialize()
-    await application.start()
+    app.add_handler(CommandHandler("wandi", wandi_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply_handler))
 
-    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "worker-production-2c28.up.railway.app")
-    webhook_url = f"https://{domain}/webhook"
-
-    await application.bot.set_webhook(
-        url=webhook_url,
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
-    logger.info(f"Webhook set successfully to: {webhook_url}")
-
-    yield
-
-    await application.stop()
-    await application.shutdown()
-
-
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    try:
-        data = await request.json()
-        update = Update.de_json(data=data, bot=application.bot)
-        await application.process_update(update)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        return {"status": "error"}
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    main()
