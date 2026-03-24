@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update
@@ -22,18 +23,18 @@ logger = logging.getLogger(__name__)
 # Environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", 8080))          # Railway ger dig denna port
+PORT = int(os.getenv("PORT", 8080))
 
 if not GROQ_API_KEY or not TELEGRAM_BOT_TOKEN:
     raise ValueError("Saknar GROQ_API_KEY eller TELEGRAM_BOT_TOKEN i Railway Variables!")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Skapa Application (utan updater eftersom vi använder webhook)
+# Skapa Telegram Application
 application = (
     Application.builder()
     .token(TELEGRAM_BOT_TOKEN)
-    .updater(None)          # Viktigt för webhook!
+    .updater(None)
     .build()
 )
 
@@ -43,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    logger.info(f"Received message: {user_text}")
+    logger.info(f"Received message from {update.effective_user.username}: {user_text}")
 
     try:
         completion = await asyncio.to_thread(
@@ -76,23 +77,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Lifespan för FastAPI (startar/stänger botten snyggt)
+# Lifespan (start + stop)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await application.initialize()
     await application.start()
-    
-    # Sätt webhook automatiskt när appen startar
-    webhook_url = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'din-app.railway.app')}/webhook"
+
+    # Använd din riktiga Railway URL
+    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "worker-production-2c28.up.railway.app")
+    webhook_url = f"https://{domain}/webhook"
+
     await application.bot.set_webhook(
         url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True
     )
-    logger.info(f"Webhook set to: {webhook_url}")
-    
+    logger.info(f"✅ Webhook set successfully to: {webhook_url}")
+
     yield
-    
+
     await application.stop()
     await application.shutdown()
 
@@ -110,7 +113,7 @@ async def webhook(request: Request):
         logger.error(f"Webhook error: {e}")
         return {"status": "error"}
 
-# Starta servern med uvicorn (Railway kör detta automatiskt)
+# Start server
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
