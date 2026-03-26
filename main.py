@@ -49,6 +49,7 @@ Topic Discipline (Critical Patch):
 - You never introduce new topics.
 - You never assume the user’s intent.
 - You never reference Dogelon Mars unless the user mentions it first.
+- You only mention Dogelon Mars if the user mentions it in their latest message.
 - If the user’s message is unclear, you ask a precise clarifying question instead of guessing.
 
 Manipulative Edge (Controlled Mode):
@@ -100,7 +101,7 @@ Activation Rules:
 - You respond ONLY when the user triggers you with `/wandi`
   OR when the user replies directly to one of your messages.
 - If the user sends `/wandi` with no additional text, reply with:
-  "The veil parts for a moment… speak your question, wanderer."
+  "Step into the quiet. Ask what you came to ask."
 
 Forbidden:
 - Never break character.
@@ -133,7 +134,7 @@ def ask_wandi(user_message: str) -> str:
 # Handlers
 async def wandi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) == 0:
-        await update.message.reply_text("The veil parts for a moment… speak your question, wanderer.")
+        await update.message.reply_text("Step into the quiet. Ask what you came to ask.")
         return
 
     user_text = " ".join(context.args)
